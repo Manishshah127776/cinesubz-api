@@ -160,29 +160,36 @@ class CineSubzScraper {
         const page = await browser.newPage();
         
         await page.goto(url, { waitUntil: 'networkidle2' });
+        const pageUrl = page.url();
         
         const html = await page.content();
         const $ = cheerio.load(html);
         
         const downloadLinks = [];
         
-        // Look for download buttons/links (adjust selectors)
-        $('a[href*="download"], a[href*="mega"], a[href*="gdrive"], .download-link, .btn-download').each((i, el) => {
+        // CineSubz currently uses both normal provider URLs and absolute or
+        // relative `/api-...` gateway paths for its download buttons.
+        $('a').each((i, el) => {
             const href = $(el).attr('href');
             const text = $(el).text().trim();
-            
-            if (href && !href.includes('#')) {
+            const isDownloadLink = href && (
+                /download|mega|gdrive/i.test(href) ||
+                /\/api-[^/?#]+/i.test(href) ||
+                $(el).is('.download-link, .btn-download')
+            );
+
+            if (isDownloadLink && !href.includes('#')) {
                 // Determine platform
                 let platform = 'direct';
                 if (href.includes('mega.nz')) platform = 'Mega';
                 else if (href.includes('drive.google.com')) platform = 'Google Drive';
                 else if (href.includes('mediafire.com')) platform = 'MediaFire';
                 else if (href.includes('dropbox.com')) platform = 'Dropbox';
-                
+
                 downloadLinks.push({
                     platform,
                     label: text || platform,
-                    url: href.startsWith('http') ? href : `${BASE_URL}${href}`
+                    url: new URL(href, pageUrl).href
                 });
             }
         });
@@ -196,7 +203,7 @@ class CineSubzScraper {
             if (href) {
                 subtitleLinks.push({
                     label: text || 'Subtitle',
-                    url: href.startsWith('http') ? href : `${BASE_URL}${href}`
+                    url: new URL(href, pageUrl).href
                 });
             }
         });
