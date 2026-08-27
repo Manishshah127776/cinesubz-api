@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CineSubz API Download Client</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    body {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem 1rem;
+      background: #111827;
+      color: #f9fafb;
+    }
+
+    h1 { margin-top: 0; }
+
+    form {
+      display: grid;
+      gap: .75rem;
+      margin: 1.5rem 0;
+    }
+
+    input, button {
+      border: 1px solid #374151;
+      border-radius: .5rem;
+      padding: .8rem 1rem;
+      font: inherit;
+    }
+
+    input {
+      width: 100%;
+      box-sizing: border-box;
+      background: #1f2937;
+      color: #f9fafb;
+    }
+
+    button {
+      background: #2563eb;
+      color: white;
+      cursor: pointer;
+    }
+
+    button:hover { background: #1d4ed8; }
+    button:disabled { opacity: .6; cursor: wait; }
+
+    #status {
+      min-height: 1.5rem;
+      color: #cbd5e1;
+    }
+
+    .error { color: #fca5a5 !important; }
+    .success { color: #86efac !important; }
+
+    section {
+      margin-top: 1.5rem;
+      padding: 1rem;
+      border: 1px solid #374151;
+      border-radius: .75rem;
+      background: #1f2937;
+    }
+
+    ul { padding-left: 1.25rem; }
+    li { margin: .75rem 0; }
+
+    a {
+      color: #93c5fd;
+      overflow-wrap: anywhere;
+    }
+
+    .download-button {
+      margin-left: .5rem;
+      padding: .35rem .65rem;
+      font-size: .9rem;
+    }
+
+    small {
+      display: block;
+      margin-top: .35rem;
+      color: #9ca3af;
+      overflow-wrap: anywhere;
+    }
+  </style>
+</head>
+<body>
+  <h1>CineSubz API Download Client</h1>
+  <p>Enter a movie page URL that you are authorized to access.</p>
+
+  <form id="movie-form">
+    <label for="movie-url">Movie page URL</label>
+    <input
+      id="movie-url"
+      name="movieUrl"
+      type="url"
+      required
+      placeholder="https://example.com/authorized-movie-page"
+    >
+    <button id="submit-button" type="submit">Find download links</button>
+  </form>
+
+  <p id="status" role="status" aria-live="polite"></p>
+
+  <section id="results" hidden>
+    <h2>Available links</h2>
+    <div id="download-results"></div>
+  </section>
+
+  <script>
+    // Change this if your API is hosted elsewhere.
+    const API_BASE = "https://3000-ix6stow3kjwx9hsb3hycs-776f6acf.us2.manus.computer";
+
+    const form = document.getElementById("movie-form");
+    const movieUrlInput = document.getElementById("movie-url");
+    const submitButton = document.getElementById("submit-button");
+    const statusElement = document.getElementById("status");
+    const resultsElement = document.getElementById("results");
+    const downloadResultsElement = document.getElementById("download-results");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      await findLinks(movieUrlInput.value.trim());
+    });
+
+    async function findLinks(moviePageUrl) {
+      setStatus("Contacting the API…", "");
+      submitButton.disabled = true;
+      resultsElement.hidden = true;
+      downloadResultsElement.replaceChildren();
+
+      try {
+        const endpoint = new URL("/api/download", API_BASE);
+        endpoint.searchParams.set("url", moviePageUrl);
+
+        const response = await fetch(endpoint, {
+          method: "GET",
+          headers: { "Accept": "application/json" }
+        });
+
+        const payload = await response.json().catch(() => null);
+
+        if (!response.ok || !payload?.success) {
+          throw new Error(payload?.error || `API request failed with HTTP ${response.status}`);
+        }
+
+        const downloadLinks = Array.isArray(payload.data?.downloadLinks)
+          ? payload.data.downloadLinks
+          : [];
+        const subtitleLinks = Array.isArray(payload.data?.subtitleLinks)
+          ? payload.data.subtitleLinks
+          : [];
+
+        renderLinks("Movie downloads", downloadLinks, "download");
+        renderLinks("Subtitle downloads", subtitleLinks, "subtitle");
+        resultsElement.hidden = false;
+
+        if (downloadLinks.length === 0 && subtitleLinks.length === 0) {
+          setStatus(
+            "The API responded successfully, but it found no matching links. Check the scraper selectors and the supplied page.",
+            "error"
+          );
+        } else {
+          setStatus("Links found. Select a download button.", "success");
+        }
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : String(error), "error");
+      } finally {
+        submitButton.disabled = false;
+      }
+    }
+
+    function renderLinks(title, links, kind) {
+      if (links.length === 0) return;
+
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      downloadResultsElement.appendChild(heading);
+
+      const list = document.createElement("ul");
+
+      for (const item of links) {
+        if (!item || typeof item.url !== "string") continue;
+
+        let parsedUrl;
+        try {
+          parsedUrl = new URL(item.url);
+        } catch {
+          continue;
+        }
+
+        // Only display web URLs. Do not allow javascript:, data:, or other schemes.
+        if (!/^https?:$/.test(parsedUrl.protocol)) continue;
+
+        const listItem = document.createElement("li");
+        const openLink = document.createElement("a");
+        openLink.href = parsedUrl.href;
+        openLink.target = "_blank";
+        openLink.rel = "noopener noreferrer";
+        openLink.textContent = item.label || item.platform || "Open link";
+
+        const downloadButton = document.createElement("button");
+        downloadButton.type = "button";
+        downloadButton.className = "download-button";
+        downloadButton.textContent = kind === "subtitle" ? "Download subtitle" : "Download file";
+        downloadButton.addEventListener("click", () => downloadResource(parsedUrl.href, item.label));
+
+        const details = document.createElement("small");
+        details.textContent = parsedUrl.href;
+
+        listItem.append(openLink, downloadButton, details);
+        list.appendChild(listItem);
+      }
+
+      downloadResultsElement.appendChild(list);
+    }
+
+    async function downloadResource(resourceUrl, label) {
+      setStatus("Preparing the download…", "");
+
+      try {
+        // This requires the remote server to permit CORS. It lets the browser
+        // save the response with a filename instead of merely opening a tab.
+        const response = await fetch(resourceUrl, { mode: "cors" });
+        if (!response.ok) {
+          throw new Error(`The file server returned HTTP ${response.status}`);
+        }
+
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        const anchor = document.createElement("a");
+        anchor.href = objectUrl;
+        anchor.download = filenameFromResponse(response, resourceUrl, label);
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        URL.revokeObjectURL(objectUrl);
+        setStatus("Download started.", "success");
+      } catch (error) {
+        // Cross-origin file hosts often block browser fetches. In that case,
+        // open the authorized URL directly so the host can handle the download.
+        window.open(resourceUrl, "_blank", "noopener,noreferrer");
+        setStatus(
+          "The file host blocked browser streaming, so the link was opened in a new tab.",
+          ""
+        );
+      }
+    }
+
+    function filenameFromResponse(response, resourceUrl, label) {
+      const disposition = response.headers.get("content-disposition") || "";
+      const match = disposition.match(/filename\*?=(?:UTF-8''|\"?)([^\";]+)/i);
+      if (match?.[1]) return decodeURIComponent(match[1].replaceAll("\"", ""));
+
+      const pathName = new URL(resourceUrl).pathname;
+      const lastSegment = pathName.split("/").filter(Boolean).pop();
+      if (lastSegment && /\.[a-z0-9]{2,5}$/i.test(lastSegment)) return lastSegment;
+
+      const safeLabel = String(label || "download")
+        .replace(/[^a-z0-9._-]+/gi, "-")
+        .replace(/^-+|-+$/g, "");
+      return safeLabel || "download";
+    }
+
+    function setStatus(message, className) {
+      statusElement.textContent = message;
+      statusElement.className = className;
+    }
+  </script>
+</body>
+</html>
+
+<!--
+  Important:
+  1. The API must return at least one item in data.downloadLinks or data.subtitleLinks.
+  2. The remote file host must allow CORS for in-browser streaming; otherwise the
+     script opens the authorized URL directly as a fallback.
+  3. Use this only for files you own or are licensed to download and redistribute.
+-->
