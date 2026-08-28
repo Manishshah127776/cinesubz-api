@@ -24,6 +24,7 @@ APP_NAME = "CineSubz Authorized Download Proxy"
 PORT = int(os.getenv("PROXY_PORT", "8000"))
 MAX_DOWNLOAD_BYTES = int(os.getenv("MAX_DOWNLOAD_BYTES", str(2 * 1024 * 1024 * 1024)))
 MAX_REDIRECTS = int(os.getenv("MAX_REDIRECTS", "5"))
+VIDEO_CONTENT_TYPES = {"video/mp4", "video/x-matroska", "application/octet-stream"}
 
 
 def csv_env(name: str, default: str) -> list[str]:
@@ -108,7 +109,7 @@ def content_disposition(filename: str) -> str:
     return f'attachment; filename="{filename}"'
 
 
-async def open_upstream(url: str) -> tuple[httpx.AsyncClient, httpx.Response, str]:
+async def open_upstream(url: str, method: str = "GET") -> tuple[httpx.AsyncClient, httpx.Response, str]:
     client = httpx.AsyncClient(
         timeout=httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=15.0),
         follow_redirects=False,
@@ -119,7 +120,7 @@ async def open_upstream(url: str) -> tuple[httpx.AsyncClient, httpx.Response, st
     try:
         for _ in range(MAX_REDIRECTS + 1):
             current_url = validate_url(current_url)
-            request = client.build_request("GET", current_url)
+            request = client.build_request(method, current_url)
             response = await client.send(request, stream=True)
 
             if response.status_code in {301, 302, 303, 307, 308}:
@@ -148,6 +149,22 @@ async def open_upstream(url: str) -> tuple[httpx.AsyncClient, httpx.Response, st
         raise
 
 
+async def resolve_upstream(url: str) -> tuple[str, httpx.Headers]:
+    """Follow allowlisted redirects and return final URL plus headers only."""
+    try:
+        client, response, final_url = await open_upstream(url, method="HEAD")
+        if response.status_code in {405, 501}:
+            await response.aclose()
+            await client.aclose()
+            client, response, final_url = await open_upstream(url, method="GET")
+        headers = response.headers
+        await response.aclose()
+        await client.aclose()
+        return final_url, headers
+    except Exception:
+        raise
+
+
 async def stream_limited(client: httpx.AsyncClient, response: httpx.Response) -> AsyncIterator[bytes]:
     total = 0
     try:
@@ -168,6 +185,7 @@ async def root() -> dict[str, object]:
         "status": "running",
         "health": "/health",
         "download_endpoint": "/api/proxy-download?url=...",
+        "resolve_endpoint": "/api/resolve?url=...",
         "allowed_hosts": sorted(ALLOWED_HOSTS),
     }
 
@@ -175,6 +193,35 @@ async def root() -> dict[str, object]:
 @app.get("/health")
 async def health() -> dict[str, object]:
     return {"status": "OK", "allowed_hosts": sorted(ALLOWED_HOSTS)}
+
+
+@app.get("/api/resolve")
+async def resolve_media(
+    url: str = Query(..., description="Direct media URL on an allowlisted host"),
+):
+    """Resolve an authorized media URL without downloading its response body."""
+    try:
+        validated_url = validate_url(url)
+        final_url, upstream_headers = await resolve_upstream(validated_url)
+        content_type = upstream_headers.get("content-type", "application/octet-stream").split(";", 1)[0].lower()
+        filename = safe_filename(None, final_url)
+        content_length = upstream_headers.get("content-length")
+        suffix = urlparse(final_url).path.lower()
+        is_video = content_type in VIDEO_CONTENT_TYPES or suffix.endswith((".mp4", ".mkv"))
+
+        return {
+            "success": True,
+            "authorized": True,
+            "finalUrl": final_url,
+            "contentType": content_type,
+            "contentLength": int(content_length) if content_length and content_length.isdigit() else None,
+            "filename": filename,
+            "isVideo": is_video,
+        }
+    except ProxyRequestError as exc:
+        return JSONResponse(status_code=400, content={"success": False, "error": str(exc)})
+    except (httpx.HTTPError, ValueError) as exc:
+        return JSONResponse(status_code=502, content={"success": False, "error": f"Upstream metadata request failed: {exc}"})
 
 
 @app.get("/api/proxy-download")

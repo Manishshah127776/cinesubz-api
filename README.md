@@ -53,6 +53,7 @@ flowchart LR
 | `GET` | `/api/tvshows/:id` | TV show details and extracted links |
 | `GET` | `/api/search?q=query&page=1` | Search movies and TV shows |
 | `GET` | `/api/download?url=PAGE_URL` | Extract links from an authorized page |
+| `GET` | `/api/resolve?url=FILE_URL` | Follow allowlisted redirects and return final media metadata without streaming the body |
 | `GET` | `/api/proxy-download?url=FILE_URL` | Stream an authorized file through the CORS proxy |
 
 ## Quick start
@@ -99,6 +100,15 @@ curl --get http://localhost:3000/api/download \
   --data-urlencode "url=https://your-authorized-site.example/movie-page"
 ```
 
+Resolve an authorized media URL without downloading its body:
+
+```bash
+curl --get http://localhost:8000/api/resolve \
+  --data-urlencode "url=https://your-licensed-file-host.example/path/file.mp4"
+```
+
+The resolver returns the final URL, content type, content length, filename, and an `isVideo` flag after validating every redirect against the allowlist.
+
 Stream a direct authorized file through the Python proxy:
 
 ```bash
@@ -118,7 +128,7 @@ window.location.href = proxyUrl.toString();
 
 ## Proxy safeguards
 
-The Python proxy includes explicit host allowlisting, HTTP and HTTPS scheme validation, standard-port validation, rejection of userinfo-bearing URLs, DNS resolution checks for private or reserved addresses, redirect revalidation, response size limits, sanitized filenames, `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`.
+The Python proxy includes explicit host allowlisting, HTTP and HTTPS scheme validation, standard-port validation, rejection of userinfo-bearing URLs, DNS resolution checks for private or reserved addresses, redirect revalidation, metadata-only resolution, response size limits, sanitized filenames, `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Cache-Control: no-store`.
 
 For production, set `DOWNLOAD_ALLOWED_HOSTS` to exact domains you are authorized to proxy and replace the development-wide CORS setting with your real frontend origin in `ALLOWED_ORIGINS`. Never deploy an unrestricted `?url=` proxy.
 
