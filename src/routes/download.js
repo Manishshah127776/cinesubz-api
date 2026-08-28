@@ -2,36 +2,57 @@ const express = require('express');
 const router = express.Router();
 const Scraper = require('../../scraper');
 
-router.get('/', async (req, res) => {
+function parsePageUrl(value) {
+    if (typeof value !== 'string' || !value.trim()) {
+        throw new Error('URL parameter is required');
+    }
+
+    let parsed;
     try {
-        const { url } = req.query;
-        
-        if (!url) {
-            return res.status(400).json({
-                success: false,
-                error: 'URL parameter is required'
-            });
-        }
-        
-        const cacheKey = `download_${Buffer.from(url).toString('base64')}`;
+        parsed = new URL(value.trim());
+    } catch {
+        throw new Error('URL must be a complete valid URL, for example https://example.com/movie-page');
+    }
+
+    if (!['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname) {
+        throw new Error('URL must use http:// or https:// and include a hostname');
+    }
+
+    return parsed.href;
+}
+
+router.get('/', async (req, res) => {
+    let scraper;
+
+    try {
+        const pageUrl = parsePageUrl(req.query.url);
+        const cacheKey = `download_${Buffer.from(pageUrl).toString('base64')}`;
         let data = req.cache.get(cacheKey);
-        
+
         if (!data) {
-            const scraper = new Scraper();
+            scraper = new Scraper();
             await scraper.init();
-            data = await scraper.getDownloadLinks(url);
-            await scraper.close();
-            
+            data = await scraper.getDownloadLinks(pageUrl);
             req.cache.set(cacheKey, data);
         }
-        
+
         res.json({
             success: true,
             data,
             cached: !!req.cache.get(cacheKey)
         });
     } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+        const message = error instanceof Error ? error.message : String(error);
+        const isInputError = message === 'URL parameter is required' ||
+            message.startsWith('URL must be');
+        res.status(isInputError ? 400 : 502).json({
+            success: false,
+            error: message
+        });
+    } finally {
+        if (scraper) {
+            await scraper.close().catch(() => {});
+        }
     }
 });
 
